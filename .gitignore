@@ -1,5 +1,5 @@
 # ============================================================================
-# Project1_DataClean Git 忽略规则
+# 电商智能客服知识库 & 对话语料预处理流水线 —— Git 忽略规则
 # ============================================================================
 
 # --- Python 字节码 & 缓存 ---
@@ -30,22 +30,24 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 
-# --- 数据文件（根据需要调整） ---
-# 原始数据和清洗数据通常较大，建议不纳入版本控制
+# --- 数据文件 ---
+# 生成数据量较大，可按需取消注释
 # data/raw/*.csv
 # data/processed/*.csv
-# 标注数据量小且为人工标注成果，建议纳入版本控制
-# data/labeled_data.csv（保留）
 
 # --- 输出产物 ---
 data/output/*.png
 data/output/*.log
 data/output/*.pkl
 data/output/*.joblib
+data/output/*.jsonl
+
+# --- RAG 导出目录 ---
+rag_output/
+rag_export/
 
 # --- 环境变量 ---
-# .env 文件根据团队策略决定是否忽略
-# .env
+# .env 根据团队策略决定是否忽略
 
 # --- 安装包 / 二进制文件 ---
 *.msi

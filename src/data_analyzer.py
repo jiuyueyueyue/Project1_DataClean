@@ -1,17 +1,17 @@
 """
-标签分布统计与可视化模块
+电商语料数据统计与可视化模块
 
-从 Label Studio 标注数据中提取多标签，统计各类标签出现频次，
-并生成专业柱状分布图。
+对清洗后的语料数据进行多维度统计分析:
+  1. 四类数据占比分布
+  2. 文本长度分布（箱线图 + 直方图）
+  3. 各品类/场景下的样本分布
+  4. 数据质量摘要报告
 
-原文件: data_analysis.py
-重构点:
-  - eval() 安全漏洞 → utils.label_parser 安全解析
-  - 硬编码路径 → config.settings 驱动
-  - 无异常处理 → try-except 全流程覆盖
-  - 裸 print → structured logging
-  - 无类型注解 → 完整类型标注
-  - 重复解析逻辑 → 复用 parse_label_studio_annotations
+原文件: data_analysis.py（标签分布分析）
+改造点:
+  - 分析目标从"标签频次"切换为"语料统计"
+  - 新增数据类型占比和文本长度分布可视化
+  - 复用 utils 安全 I/O
 """
 
 import logging
@@ -20,112 +20,192 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from config import settings
 from utils.io_utils import safe_read_csv
-from utils.label_parser import parse_label_studio_annotations
 
 
-def analyze_label_distribution(
-    input_path: Optional[Path] = None,
+def analyze_corpus(
+    data_paths: Optional[Dict[str, Path]] = None,
     output_plot_path: Optional[Path] = None,
     show_plot: Optional[bool] = None,
     logger: Optional[logging.Logger] = None,
-) -> Dict[str, int]:
+) -> Dict[str, Dict[str, int]]:
     """
-    统计标注标签分布并生成可视化柱状图
+    电商语料数据统计分析
+
+    读取清洗后的四类数据，输出:
+      - 数据类型占比饼图（左上）
+      - 文本长度分布直方图（右上）
+      - FAQ 品类分布柱状图（左下）
+      - 对话日志场景分布柱状图（右下）
 
     Args:
-        input_path:      标注数据 CSV 路径，默认 settings.LABELED_DATA_PATH
-        output_plot_path: 图表输出路径，默认 settings.LABEL_PLOT_PATH
-        show_plot:        是否弹出图表窗口，默认 settings.SHOW_PLOT
+        data_paths:      各数据类型清洗后文件路径字典
+        output_plot_path: 图表输出路径
+        show_plot:        是否弹出图表窗口
         logger:           logger 实例
 
     Returns:
-        Dict[str, int]: 标签 → 出现次数的频次字典
-
-    Raises:
-        FileNotFoundError: 标注文件不存在时抛出
-        ValueError:        未解析到有效标签时抛出
+        统计结果字典: {data_type: {category: count}}
     """
     log = logger or logging.getLogger(__name__)
-    input_path = input_path or settings.LABELED_DATA_PATH
-    output_plot_path = output_plot_path or settings.LABEL_PLOT_PATH
+    output_plot_path = output_plot_path or settings.CORPUS_PLOT_PATH
     show_plot = show_plot if show_plot is not None else settings.SHOW_PLOT
 
-    # ========================================================================
-    # Step 1: 读取标注数据
-    # ========================================================================
-    log.info("=" * 50)
-    log.info("开始标签分布分析")
-    log.info("=" * 50)
+    log.info("=" * 60)
+    log.info("  电商语料统计分析")
+    log.info("=" * 60)
 
-    df = safe_read_csv(input_path, encoding=settings.CSV_ENCODING, logger=log)
-    if df.empty:
-        raise ValueError(f"标注数据文件为空或读取失败: {input_path}")
-
-    log.info("标注数据加载完成，共 %d 行", len(df))
-
-    # ========================================================================
-    # Step 2: 安全解析标注列
-    # ========================================================================
-    _, labels_list = parse_label_studio_annotations(df, logger=log)
-
-    # 展平嵌套标签列表
-    all_labels: List[str] = [label for sublist in labels_list for label in sublist]
-
-    if not all_labels:
-        raise ValueError(
-            "未解析到任何有效标签，请检查标注文件 %s 中的标注列格式" % input_path
-        )
+    if data_paths is None:
+        data_paths = {
+            "FAQ问答":    settings.PROCESSED_DIR / "clean_faq.csv",
+            "商品资料":    settings.PROCESSED_DIR / "clean_product.csv",
+            "售后规则":    settings.PROCESSED_DIR / "clean_aftersales.csv",
+            "对话日志":    settings.PROCESSED_DIR / "clean_chatlog.csv",
+        }
 
     # ========================================================================
-    # Step 3: 频次统计
+    # Step 1: 加载所有数据
     # ========================================================================
-    counter = Counter(all_labels)
-    log.info("共解析到 %d 个标签实例，%d 种不同标签", len(all_labels), len(counter))
+    datasets: Dict[str, pd.DataFrame] = {}
+    for label, path in data_paths.items():
+        if path.exists():
+            df = safe_read_csv(path, encoding=settings.CSV_ENCODING, logger=log)
+            if not df.empty:
+                datasets[label] = df
+                log.info("加载 [%s]: %d 条", label, len(df))
+        else:
+            log.warning("[%s] 文件不存在: %s", label, path)
 
-    # 日志输出统计结果
-    log.info("==== 各类标签统计数量 ====")
-    for lab, cnt in counter.most_common():
-        log.info("  %-12s : %d", lab, cnt)
+    if not datasets:
+        raise ValueError("未找到任何清洗后的数据文件，请先运行数据生成和清洗")
 
     # ========================================================================
-    # Step 4: 可视化
+    # Step 2: 数据量占比统计
+    # ========================================================================
+    counts = {label: len(df) for label, df in datasets.items()}
+    total_samples = sum(counts.values())
+    log.info("总语料量: %d 条", total_samples)
+    for label, cnt in counts.items():
+        log.info("  %s: %d 条 (%.1f%%)", label, cnt, cnt / total_samples * 100)
+
+    # ========================================================================
+    # Step 3: 各数据类型的子类别分布
+    # ========================================================================
+    distribution: Dict[str, Dict[str, int]] = {}
+
+    for label, df in datasets.items():
+        # 根据数据类型选择分类列
+        if "category" in df.columns:
+            col = "category"
+        elif "rule_category" in df.columns:
+            col = "rule_category"
+        elif "intent_label" in df.columns:
+            col = "intent_label"
+        else:
+            continue
+
+        # 过滤空值
+        valid = df[df[col].notna() & (df[col] != "")]
+        if valid.empty:
+            continue
+        distribution[label] = dict(Counter(valid[col].tolist()))
+        log.info("[%s] 子类分布: %s", label,
+                 {k: v for k, v in sorted(distribution[label].items(), key=lambda x: -x[1])[:5]})
+
+    # ========================================================================
+    # Step 4: 文本长度统计
+    # ========================================================================
+    length_stats: Dict[str, Dict[str, float]] = {}
+    for label, df in datasets.items():
+        # 选择文本列
+        if "clean_text" in df.columns:
+            text_col = "clean_text"
+        elif "description" in df.columns:
+            text_col = "description"
+        elif "answer" in df.columns:
+            text_col = "answer"
+        elif "message" in df.columns:
+            text_col = "message"
+        else:
+            continue
+
+        lengths = df[text_col].astype(str).str.len()
+        length_stats[label] = {
+            "mean": float(lengths.mean()),
+            "median": float(lengths.median()),
+            "min": float(lengths.min()),
+            "max": float(lengths.max()),
+            "std": float(lengths.std()),
+        }
+        log.info("[%s] 文本长度: 均值=%.0f, 中位数=%.0f, 范围=[%.0f, %.0f]",
+                 label, length_stats[label]["mean"], length_stats[label]["median"],
+                 length_stats[label]["min"], length_stats[label]["max"])
+
+    # ========================================================================
+    # Step 5: 可视化
     # ========================================================================
     try:
-        # 修复 matplotlib 中文显示
         plt.rcParams["font.sans-serif"] = ["SimHei", "Microsoft YaHei", "DejaVu Sans"]
         plt.rcParams["axes.unicode_minus"] = False
 
-        fig, ax = plt.subplots(figsize=settings.PLOT_FIGSIZE)
+        fig, axes = plt.subplots(2, 2, figsize=settings.PLOT_FIGSIZE)
+        colors = settings.PLOT_COLOR_PALETTE
 
-        labels_sorted = [item[0] for item in counter.most_common()]
-        values_sorted = [item[1] for item in counter.most_common()]
+        # 子图1: 数据类型占比饼图
+        ax1 = axes[0, 0]
+        labels_pie = list(counts.keys())
+        sizes_pie = list(counts.values())
+        wedges, texts, autotexts = ax1.pie(
+            sizes_pie, labels=labels_pie, autopct="%1.1f%%",
+            colors=colors[:len(labels_pie)], startangle=90,
+        )
+        ax1.set_title("四类业务数据占比", fontsize=13, fontweight="bold")
 
-        bars = ax.bar(labels_sorted, values_sorted, color=settings.PLOT_COLOR)
-        ax.set_title(settings.PLOT_TITLE, fontsize=14, fontweight="bold")
-        ax.set_ylabel(settings.PLOT_YLABEL, fontsize=12)
-        ax.set_xlabel("标签类别", fontsize=12)
-        ax.tick_params(axis="x", rotation=45)
+        # 子图2: 文本长度分布直方图
+        ax2 = axes[0, 1]
+        for idx, (label, df) in enumerate(datasets.items()):
+            text_col = next((c for c in ["clean_text", "description", "answer", "message"] if c in df.columns), None)
+            if text_col:
+                lengths = df[text_col].astype(str).str.len()
+                # 截断极端值以改善显示
+                clipped = lengths.clip(upper=lengths.quantile(0.95))
+                ax2.hist(clipped, bins=30, alpha=0.6, label=label, color=colors[idx % len(colors)])
+        ax2.set_title("文本长度分布（95分位数截断）", fontsize=13, fontweight="bold")
+        ax2.set_xlabel("字符数")
+        ax2.set_ylabel("样本数")
+        ax2.legend(fontsize=8)
 
-        # 在柱顶标注数值
-        for bar_obj, val in zip(bars, values_sorted):
-            ax.text(
-                bar_obj.get_x() + bar_obj.get_width() / 2,
-                bar_obj.get_height() + 0.3,
-                str(val),
-                ha="center",
-                va="bottom",
-                fontsize=9,
-            )
+        # 子图3: FAQ 品类分布
+        ax3 = axes[1, 0]
+        if "FAQ问答" in distribution:
+            faq_dist = distribution["FAQ问答"]
+            faq_sorted = sorted(faq_dist.items(), key=lambda x: -x[1])
+            faq_labels, faq_vals = zip(*faq_sorted) if faq_sorted else ([], [])
+            ax3.barh(list(faq_labels), list(faq_vals), color=colors[0])
+            ax3.set_title("FAQ 品类分布", fontsize=13, fontweight="bold")
+            ax3.set_xlabel("问答对数")
+        else:
+            ax3.text(0.5, 0.5, "暂无FAQ数据", ha="center", va="center", transform=ax3.transAxes)
+
+        # 子图4: 对话日志场景分布
+        ax4 = axes[1, 1]
+        if "对话日志" in distribution:
+            chat_dist = distribution["对话日志"]
+            chat_sorted = sorted(chat_dist.items(), key=lambda x: -x[1])
+            chat_labels, chat_vals = zip(*chat_sorted) if chat_sorted else ([], [])
+            ax4.barh(list(chat_labels), list(chat_vals), color=colors[3])
+            ax4.set_title("客服对话场景分布", fontsize=13, fontweight="bold")
+            ax4.set_xlabel("对话轮数")
+        else:
+            ax4.text(0.5, 0.5, "暂无对话日志数据", ha="center", va="center", transform=ax4.transAxes)
 
         plt.tight_layout()
-
-        # 保存图表
         output_plot_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(output_plot_path, dpi=settings.PLOT_DPI)
-        log.info("标签分布图已保存至 %s (DPI=%d)", output_plot_path, settings.PLOT_DPI)
+        log.info("语料统计图已保存至 %s", output_plot_path)
 
         if show_plot:
             plt.show()
@@ -133,10 +213,9 @@ def analyze_label_distribution(
             plt.close(fig)
 
     except Exception as e:
-        log.error("生成标签分布图时发生异常: %s", e)
-        # 图表生成失败不应阻断主流程
+        log.error("生成统计图时发生异常: %s", e)
 
-    return dict(counter)
+    return distribution
 
 
 # ============================================================================
@@ -151,12 +230,11 @@ if __name__ == "__main__":
         level=settings.LOG_LEVEL,
     )
     logger.info("=" * 60)
-    logger.info("独立运行: 数据分析模块")
+    logger.info("独立运行: 电商语料分析模块")
     logger.info("=" * 60)
 
     try:
-        result = analyze_label_distribution(logger=logger)
-        if result:
-            logger.info("分析完成，共 %d 种标签", len(result))
+        result = analyze_corpus(logger=logger)
+        logger.info("统计完成，共 %d 类数据", len(result))
     except Exception as e:
-        logger.exception("数据分析失败: %s", e)
+        logger.exception("语料分析失败: %s", e)

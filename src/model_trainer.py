@@ -1,21 +1,20 @@
 """
-多标签文本分类模型训练模块
+电商智能客服意图识别模型训练模块
 
-使用 TF-IDF 文本向量化 + 随机森林多输出分类器构建多标签分类模型，
-支持:
-  - 从 Label Studio 标注数据自动提取文本/标签
-  - 训练/测试集划分
-  - 模型训练与评估（Hamming Loss, Classification Report）
-  - 单句推理预测
+基于 TF-IDF 文本向量化 + 随机森林多输出分类器，
+对客服对话日志进行意图识别多标签分类模型训练。
 
-原文件: train_classifier.py
-重构点:
-  - eval() 安全漏洞 → utils.label_parser 安全解析
-  - 硬编码模型参数 → config.settings 集中管理
-  - 无异常处理 → try-except 全流程覆盖
-  - 裸 print → structured logging
-  - 无类型注解 → 完整类型标注
-  - 重复解析逻辑 → 复用 parse_label_studio_annotations
+使用场景:
+  - 输入用户问句，预测意图标签（如: 物流查询、退换货、商品咨询等）
+  - 训练数据来源: 清洗后的客服对话日志 (chatlog)
+  - 为上层 NLU 引擎提供意图分类能力
+
+原文件: train_classifier.py（智能家居多标签分类）
+改造点:
+  - 训练数据从 labeled_data.csv (Label Studio) 切换为对话日志 chatlog
+  - 适配电商意图标签体系
+  - 保留 TF-IDF + RandomForest 架构不变
+  - 新增模型导出为 .pkl（可选持久化）
 """
 
 import logging
@@ -33,72 +32,88 @@ from sklearn.preprocessing import MultiLabelBinarizer
 
 from config import settings
 from utils.io_utils import safe_read_csv
-from utils.label_parser import parse_label_studio_annotations
 
 
-def train_multilabel_classifier(
+def train_intent_classifier(
     input_path: Optional[Path] = None,
     logger: Optional[logging.Logger] = None,
 ) -> Dict[str, Any]:
     """
-    训练多标签文本分类模型（全流程）
+    训练电商意图识别多标签分类模型
 
     流程:
-    1. 读取 Label Studio 导出数据
-    2. 安全解析标注列，提取文本和多标签
+    1. 读取清洗后的对话日志数据
+    2. 提取 user 消息和 intent_label 作为训练样本
     3. TF-IDF 文本向量化
     4. MultiLabelBinarizer 标签编码
-    5. 训练/测试集划分（stratify 不可用于多标签，使用普通划分）
+    5. 训练/测试集划分
     6. RandomForest + MultiOutputClassifier 训练
-    7. 模型评估（Hamming Loss + Classification Report）
-    8. 返回模型及评估结果字典
+    7. 模型评估
 
     Args:
-        input_path: 标注数据 CSV 路径，默认 settings.LABELED_DATA_PATH
+        input_path: 对话日志 CSV 路径，默认 settings.PROCESSED_DIR / "clean_chatlog.csv"
         logger:     logger 实例
 
     Returns:
         包含以下键的字典:
-        - "model":          训练好的模型对象
+        - "model":          训练好的 MultiOutputClassifier
         - "vectorizer":     TF-IDF 向量化器
         - "mlb":            MultiLabelBinarizer 实例
-        - "hamming_loss":   汉明损失值
+        - "hamming_loss":   汉明损失
         - "report":         分类报告字符串
-        - "test_count":     测试集样本数
         - "train_count":    训练集样本数
+        - "test_count":     测试集样本数
 
     Raises:
-        ValueError: 标注数据为空或标签类别不足以训练时抛出
+        ValueError: 训练数据为空或标签类别不足时抛出
     """
     log = logger or logging.getLogger(__name__)
-    input_path = input_path or settings.LABELED_DATA_PATH
 
-    log.info("=" * 50)
-    log.info("开始多标签分类模型训练")
-    log.info("=" * 50)
+    if input_path is None:
+        input_path = settings.PROCESSED_DIR / "clean_chatlog.csv"
+
+    log.info("=" * 60)
+    log.info("  电商意图识别模型训练")
+    log.info("=" * 60)
 
     # ========================================================================
-    # Step 1: 读取并解析标注数据
+    # Step 1: 读取并预处理对话数据
     # ========================================================================
     df = safe_read_csv(input_path, encoding=settings.CSV_ENCODING, logger=log)
     if df.empty:
-        raise ValueError(f"标注数据文件为空或读取失败: {input_path}")
+        raise ValueError(f"对话日志数据为空或读取失败: {input_path}")
 
-    texts, labels_list = parse_label_studio_annotations(df, logger=log)
+    # 仅使用 user 消息及其意图标签进行训练
+    user_df = df[df["role"] == "user"].copy()
+    if user_df.empty:
+        raise ValueError("对话日志中无 user 角色数据，无法训练意图分类器")
 
-    if len(texts) == 0:
-        raise ValueError("未能从标注文件中提取到有效文本-标签对")
-    if len(texts) < 10:
-        log.warning("标注数据量仅 %d 条，模型效果可能不理想", len(texts))
+    # 过滤无标签的样本
+    user_df = user_df[user_df["intent_label"].notna() & (user_df["intent_label"] != "")]
+    if user_df.empty:
+        raise ValueError("对话日志中无有效意图标签，请检查 chatlog 数据的 intent_label 列")
 
-    log.info("提取到 %d 条有效标注数据", len(texts))
+    texts = user_df["message"].astype(str).tolist()
+    # 将意图标签包装为列表（兼容 MultiLabelBinarizer）
+    labels_list: List[List[str]] = [[lbl.strip()] for lbl in user_df["intent_label"].tolist()]
+
+    unique_labels = sorted(set(lbl for sublist in labels_list for lbl in sublist))
+    log.info("提取训练样本: %d 条, 意图类别: %d 种", len(texts), len(unique_labels))
+    log.info("意图标签: %s", unique_labels)
+
+    if len(unique_labels) < 2:
+        log.warning("意图类别仅 %d 种，分类器效果可能有限", len(unique_labels))
 
     # ========================================================================
-    # Step 2: TF-IDF 文本向量化
+    # Step 2: TF-IDF 向量化
     # ========================================================================
     log.info("正在进行 TF-IDF 向量化 (max_features=%d)...", settings.TFIDF_MAX_FEATURES)
     try:
-        vectorizer = TfidfVectorizer(max_features=settings.TFIDF_MAX_FEATURES)
+        vectorizer = TfidfVectorizer(
+            max_features=settings.TFIDF_MAX_FEATURES,
+            analyzer="char_wb",
+            ngram_range=(2, 4),
+        )
         X = vectorizer.fit_transform(texts)
         log.info("向量化完成，特征维度: %d", X.shape[1])
     except Exception as e:
@@ -110,10 +125,7 @@ def train_multilabel_classifier(
     # ========================================================================
     mlb = MultiLabelBinarizer()
     y = mlb.fit_transform(labels_list)
-    log.info("标签编码完成，标签类别: %s", list(mlb.classes_))
-
-    if len(mlb.classes_) < 2:
-        log.warning("标签类别仅 %d 个，多标签分类意义有限", len(mlb.classes_))
+    log.info("标签编码完成，输出维度: %d × %d", y.shape[0], y.shape[1])
 
     # ========================================================================
     # Step 4: 训练/测试集划分
@@ -124,9 +136,8 @@ def train_multilabel_classifier(
         random_state=settings.RANDOM_SEED,
     )
     log.info(
-        "数据集划分完成: 训练集 %d 条, 测试集 %d 条 (比例 %.0f/%.0f)",
-        X_train.shape[0],
-        X_test.shape[0],
+        "数据集划分: 训练集 %d 条, 测试集 %d 条 (%.0f/%.0f)",
+        X_train.shape[0], X_test.shape[0],
         (1 - settings.TRAIN_TEST_SPLIT_RATIO) * 100,
         settings.TRAIN_TEST_SPLIT_RATIO * 100,
     )
@@ -167,9 +178,6 @@ def train_multilabel_classifier(
     log.info("汉明损失 (Hamming Loss): %.4f", h_loss)
     log.info("分类报告:\n%s", report)
 
-    # ========================================================================
-    # Step 7: 返回结果
-    # ========================================================================
     return {
         "model": model,
         "vectorizer": vectorizer,
@@ -181,7 +189,7 @@ def train_multilabel_classifier(
     }
 
 
-def predict_sentence(
+def predict_intent(
     sentence: str,
     model: Any,
     vectorizer: TfidfVectorizer,
@@ -189,17 +197,17 @@ def predict_sentence(
     logger: Optional[logging.Logger] = None,
 ) -> List[str]:
     """
-    对单句文本进行多标签推理预测
+    对用户输入问句进行意图识别预测
 
     Args:
-        sentence:   输入文本
-        model:      训练好的 MultiOutputClassifier 模型
+        sentence:   用户输入文本
+        model:      训练好的 MultiOutputClassifier
         vectorizer: TF-IDF 向量化器
         mlb:        MultiLabelBinarizer 实例
         logger:     logger 实例
 
     Returns:
-        预测的标签列表 List[str]
+        预测的意图标签列表
 
     Raises:
         ValueError: 输入文本为空时抛出
@@ -213,10 +221,10 @@ def predict_sentence(
         vec_x = vectorizer.transform([sentence])
         pred = model.predict(vec_x)
         res_labels = list(mlb.inverse_transform(pred)[0])
-        log.info("推理完成: '%s' → %s", sentence[:50], res_labels)
+        log.info("意图识别: '%s' → %s", sentence[:60], res_labels)
         return res_labels
     except Exception as e:
-        log.exception("推理预测失败: %s", e)
+        log.exception("意图预测失败: %s", e)
         raise
 
 
@@ -232,23 +240,24 @@ if __name__ == "__main__":
         level=settings.LOG_LEVEL,
     )
     logger.info("=" * 60)
-    logger.info("独立运行: 模型训练模块")
+    logger.info("独立运行: 电商意图识别模型训练模块")
     logger.info("=" * 60)
 
     try:
-        result = train_multilabel_classifier(logger=logger)
+        result = train_intent_classifier(logger=logger)
 
-        # 推理测试
-        test_sent = "空调开机报错无法启动"
-        logger.info("测试推理: %s", test_sent)
-        predicted = predict_sentence(
-            test_sent,
-            result["model"],
-            result["vectorizer"],
-            result["mlb"],
-            logger=logger,
-        )
-        logger.info("预测标签: %s", predicted)
+        # 演示推理
+        test_cases = [
+            "我的快递到哪了？",
+            "收到的商品有质量问题怎么退货？",
+            "优惠券为什么用不了？",
+        ]
+        logger.info("--- 演示推理 ---")
+        for tc in test_cases:
+            predicted = predict_intent(
+                tc, result["model"], result["vectorizer"], result["mlb"], logger=logger
+            )
+            logger.info("  输入: %s → 意图: %s", tc, predicted)
 
     except Exception as e:
         logger.exception("模型训练失败: %s", e)

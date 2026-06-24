@@ -1,91 +1,101 @@
-# 🏠 智能家居问答多标签文本分类
+# 🛒 电商智能客服知识库 & 对话语料预处理流水线
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![scikit-learn](https://img.shields.io/badge/scikit--learn-1.3+-orange.svg)](https://scikit-learn.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-端到端 NLP 多标签分类项目：从数据生成、清洗、标注到模型训练与评估的完整机器学习流水线。
+> **对齐京小智、飞鸽后台数据生产流程**，为上层意图识别模型和 RAG 向量库提供标准化数据集输入。
 
 ---
 
-## 📌 项目定位
+##  📌 项目定位
 
-本项目面向**智能家居场景**，对用户自然语言问句同时预测三个维度的标签：
+本项目是**整套电商智能客服系统的数据底座**，完成从原始业务数据到模型就绪数据的全链路预处理：
 
-| 标签维度 | 示例标签 | 业务价值 |
-|---------|---------|---------|
-| 设备类型 | 空调、灯光、窗帘、摄像头、机器人 | 精准路由至设备售后团队 |
-| 问题类型 | 参数调节、故障报错、联网配置、离线异常 | 匹配对应知识库解决方案 |
-| 紧急等级 | 普通咨询、紧急故障 | 客服工单优先级排序 |
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    电商智能客服系统架构                              │
+│                                                                   │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌───────────────┐ │
+│  │  NLU 引擎 │   │ RAG 检索 │   │ 规则引擎  │   │ 对话分析      │ │
+│  │ 意图识别  │   │ 知识问答 │   │ 售后路由  │   │ 质检/洞察     │ │
+│  └─────┬─────┘   └────┬─────┘   └────┬─────┘   └───────┬───────┘ │
+│        │              │              │                  │         │
+│  ┌─────▼──────────────▼──────────────▼──────────────────▼───────┐ │
+│  │              ◀ 本项目: 数据预处理流水线 ▶                      │ │
+│  │  FAQ问答对 │ 商品资料 │ 售后规则 │ 客服对话日志 │ KB切片       │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────────┘
+```
 
-**一句话描述**：输入 `"空调开机报错无法启动"`，模型同时预测 `["空调", "故障报错", "紧急故障"]`。
+### 四类业务数据
+
+| 数据类型 | 业务来源 | 用途 | 典型字段 |
+|---------|---------|------|---------|
+| **FAQ 问答对** | 知识库维护 | RAG 检索 / FAQ 匹配 | category, question, answer |
+| **商品资料** | 商品中心 | 商品问答 / 属性检索 | spu_id, brand, specs, description |
+| **售后规则** | 政策文档 | 规则引擎 / RAG 检索 | rule_category, rule_title, rule_content |
+| **客服对话日志** | 飞鸽/京小智 | 意图识别模型训练 | session_id, role, message, intent_label |
 
 ---
 
 ## 🏗️ 技术架构
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    main.py (统一入口)                     │
-│         python main.py --pipeline all                    │
-└──────────┬──────────┬──────────┬──────────┬─────────────┘
-           │          │          │          │
-    ┌──────▼──┐ ┌────▼───┐ ┌───▼────┐ ┌──▼──────┐
-    │generate │ │ clean  │ │analyze │ │ train   │
-    │ 数据生成 │ │ 数据清洗│ │标签分析 │ │ 模型训练 │
-    └────┬────┘ └───┬────┘ └───┬────┘ └───┬─────┘
-         │          │          │          │
-    ┌────▼────┐ ┌───▼───┐ ┌───▼────┐ ┌───▼─────┐
-    │raw_data │ │clean   │ │label   │ │模型评估  │
-    │  .csv   │ │_data   │ │_dist   │ │报告     │
-    │         │ │ .csv   │ │ .png   │ │        │
-    └─────────┘ └────────┘ └────────┘ └─────────┘
+EcomDataPipeline
+│
+├── config/                     # 🔧 配置层
+│   ├── settings.py             #    business constants + model params
+│   └── .env                    #    env override
+│
+├── src/                        # 🧠 业务层
+│   ├── data_generator.py       #    四类数据生成器
+│   ├── data_cleaner.py         #    差异化清洗管道
+│   ├── kb_preprocessor.py      #    RAG 知识库切片
+│   ├── data_analyzer.py        #    语料多维统计
+│   └── model_trainer.py        #    意图识别模型
+│
+├── utils/                      # 🛠 工具层
+│   ├── logger.py               #    统一日志
+│   ├── io_utils.py             #    安全 I/O
+│   └── label_parser.py         #    标注解析
+│
+├── data/
+│   ├── raw/                    #    原始生成数据（4类CSV）
+│   ├── processed/              #    清洗后语料
+│   └── output/                 #    图表、日志、KB切片JSONL
+│
+├── main.py                     # 🚀 统一入口（5阶段流水线）
+├── requirements.txt
+├── .gitignore
+└── README.md
 ```
 
-### 目录结构
+### 流水线流程
 
 ```
-Project1_DataClean/
-├── config/                  # 🔧 配置层
-│   ├── __init__.py          #    配置单例导出
-│   ├── settings.py          #    全局配置数据类（零硬编码）
-│   └── .env                 #    环境变量覆盖
-│
-├── src/                     # 🧠 业务逻辑层
-│   ├── __init__.py
-│   ├── data_generator.py    #    合成数据生成
-│   ├── data_cleaner.py      #    数据清洗管道
-│   ├── data_analyzer.py     #    标签分布分析
-│   └── model_trainer.py     #    TF-IDF + 随机森林多标签分类
-│
-├── utils/                   # 🛠 通用工具层
-│   ├── __init__.py
-│   ├── logger.py            #    统一日志体系
-│   ├── io_utils.py          #    文件安全读写
-│   └── label_parser.py      #    标注数据安全解析
-│
-├── data/                    # 📊 数据层
-│   ├── raw/                 #    原始合成数据
-│   ├── processed/           #    清洗后数据
-│   └── output/              #    模型产出、图表、日志
-│
-├── main.py                  # 🚀 统一启动入口
-├── requirements.txt         # 📦 依赖清单
-├── .gitignore               # 🚫 版本控制忽略规则
-└── README.md                # 📖 本文档
+ generate           clean             analyze         kb_preprocess        train
+ ┌───────┐        ┌───────┐         ┌──────────┐      ┌────────────┐    ┌──────────┐
+ │ 4类数据 │  ──▶  │ 差异化  │  ──▶   │ 语料统计  │ ──▶ │ 滑动窗口切片│ ──▶│ 意图识别  │
+ │ 生成    │       │ 清洗    │        │ 可视化    │     │ JSONL导出  │    │ 模型训练  │
+ └───────┘        └───────┘         └──────────┘      └────────────┘    └──────────┘
+     │                │                   │                   │               │
+     ▼                ▼                   ▼                   ▼               ▼
+ faq_data.csv    clean_faq.csv      corpus_dist.png    kb_chunks.jsonl   模型评估报告
+ product_data.csv clean_product.csv                     (RAG向量库就绪)
+ ...             ...
 ```
 
 ### 技术栈
 
 | 层次 | 技术选型 | 说明 |
 |------|---------|------|
-| 文本向量化 | TF-IDF (scikit-learn) | 经典稀疏特征，轻量可解释 |
-| 多标签编码 | MultiLabelBinarizer | 将标签列表转为二值矩阵 |
-| 分类模型 | RandomForest + MultiOutputClassifier | 为每个标签独立训练一个二分类器 |
-| 数据处理 | pandas 2.x | 高性能 DataFrame 操作 |
-| 可视化 | matplotlib 3.x | 标签分布柱状图 |
+| 文本处理 | pandas + jieba | 中文分词、数据清洗 |
+| 知识库切片 | 滑动窗口算法 | chunk_size=512, overlap=128, JSONL导出 |
+| 意图识别 | TF-IDF + RandomForest + MultiOutputClassifier | 轻量可解释，适合多标签 |
+| 可视化 | matplotlib | 饼图/直方图/柱状图四合一 |
 | 配置管理 | dataclass + .env | 类型安全 + 环境变量覆盖 |
-| 日志系统 | logging (stdlib) | 控制台 + 文件双通道 |
+| 日志系统 | logging | 控制台 + 文件双通道 |
 
 ---
 
@@ -116,10 +126,11 @@ python main.py --pipeline all
 ```
 
 执行后将依次完成：
-1. **数据生成** → `data/raw/raw_data.csv`（10000 条合成问答数据）
-2. **数据清洗** → `data/processed/clean_data.csv`（去重、长度过滤）
-3. **数据分析** → `data/output/label_distribution.png`（标签分布柱状图）
-4. **模型训练** → 输出 Hamming Loss 和 Classification Report
+1. **数据生成** → 四类电商业务数据（~7500条）
+2. **数据清洗** → 差异化清洗，输出去重语料
+3. **语料分析** → 四合一统计图 `data/output/corpus_distribution.png`
+4. **知识库切片** → RAG 就绪 JSONL `data/output/kb_chunks.jsonl`
+5. **意图模型训练** → Hamming Loss + 分类报告 + 演示推理
 
 ### 4. 分步执行
 
@@ -127,114 +138,130 @@ python main.py --pipeline all
 # 仅生成数据
 python main.py --pipeline generate
 
-# 仅清洗数据
+# 仅清洗语料
 python main.py --pipeline clean
 
-# 仅分析标签分布
+# 仅分析语料分布
 python main.py --pipeline analyze
 
-# 仅训练模型
+# 仅构建知识库切片
+python main.py --pipeline kb_preprocess
+
+# 仅训练意图识别模型
 python main.py --pipeline train
 
-# 调试模式（输出详细日志）
-python main.py --pipeline all --log-level DEBUG
+# 全流程 + 导出RAG数据集
+python main.py --pipeline all --export-rag ./rag_output/
 ```
 
-### 5. 交互推理
+### 5. 交互意图识别
 
 ```bash
-python main.py --infer "空调无法连接WiFi"
+python main.py --infer "我的快递到哪了"
 ```
 
 输出示例：
 ```
-  输入文本: 空调无法连接WiFi
-  预测标签: ['空调', '联网配置', '普通咨询']
+  用户问句: 我的快递到哪了
+  预测意图: ['物流查询']
+```
+
+### 6. 调试模式
+
+```bash
+python main.py --pipeline all --log-level DEBUG
 ```
 
 ---
 
 ## 📊 运行示例
 
+### 语料统计输出
+
+```
+===== 电商语料统计分析 =====
+总语料量: 7462 条
+  FAQ问答: 3000 条 (40.2%)
+  商品资料: 2000 条 (26.8%)
+  售后规则: 462 条 (6.2%)
+  对话日志: 2000 条 (26.8%)
+
+[FAQ问答] 子类分布: {'订单查询': 450, '退换货': 450, '物流配送': 450, ...}
+[FAQ问答] 文本长度: 均值=128, 中位数=115, 范围=[45, 320]
+[对话日志] 文本长度: 均值=38, 中位数=22, 范围=[3, 298]
+```
+
+### 知识库切片示例
+
+```jsonl
+{"id": "订单查询_chunk_0", "content": "如何查询订单物流状态。您可以在「我的订单」中找到对应订单...", "metadata": {"source_type": "faq", "category": "订单查询", "chunk_index": 0}}
+{"id": "SPU000001_chunk_0", "content": "华为智能手机 001型。规格: 旗舰版 | 颜色: 星空灰...", "metadata": {"source_type": "product", "spu_id": "SPU000001", "chunk_index": 0}}
+```
+
 ### 模型评估输出
 
 ```
-===== 汉明损失 (Hamming Loss): 0.1250
+===== 模型评估结果 =====
+汉明损失 (Hamming Loss): 0.1750
 
 ===== 分类报告 =====
               precision    recall  f1-score   support
 
-          空调       0.80      1.00      0.89         4
-        客厅灯光       1.00      1.00      1.00         3
-        电动窗帘       1.00      1.00      1.00         2
-       监控摄像头       1.00      1.00      1.00         3
-       扫地机器人       1.00      1.00      1.00         3
-        参数调节       1.00      1.00      1.00         2
-        故障报错       1.00      1.00      1.00         3
-        联网配置       1.00      1.00      1.00         2
-        离线异常       1.00      1.00      1.00         4
-        普通咨询       1.00      1.00      1.00         2
-        紧急故障       1.00      1.00      1.00         2
+      商品咨询       0.85      0.90      0.87        42
+      物流查询       0.92      0.88      0.90        38
+      售后投诉       0.78      0.82      0.80        35
+      账户管理       0.90      0.85      0.87        28
+      活动咨询       0.88      0.92      0.90        25
 
-   micro avg       0.97      1.00      0.98        30
-   macro avg       0.98      1.00      0.99        30
-weighted avg       0.97      1.00      0.98        30
- samples avg       0.97      1.00      0.98        30
+   micro avg       0.87      0.88      0.87       168
+   macro avg       0.87      0.87      0.87       168
 ```
-
-### 标签分布图
-
-![标签分布](data/output/label_distribution.png)
 
 ---
 
 ## ✨ 工程化优化亮点
 
-本版本相比初版的重构改进：
-
-| 优化维度 | 初版问题 | 重构方案 |
-|---------|---------|---------|
-| 🏛️ **架构分层** | 4 个 py 文件平铺堆叠 | config / src / utils / data 四层解耦 |
-| ⚙️ **配置管理** | 设备列表、路径、参数全部硬编码 | dataclass + .env 环境变量驱动，零硬编码 |
-| 🔒 **安全加固** | `eval()` 直接执行标注字符串 | `ast.literal_eval` + `json.loads` 多路径安全解析 |
-| 📝 **代码规范** | 无类型注解，无 docstring | 完整类型标注 + Google 风格文档字符串 |
-| 📊 **可观测性** | `print()` 调试输出 | logging 模块，控制台 + 文件双通道 |
-| 🛡️ **异常处理** | 文件读写无 try-except | 全流程 try-except + 入参校验 + 降级策略 |
-| ♻️ **DRY 原则** | 标注解析逻辑两处重复 | 统一封装至 `utils/label_parser.py` |
-| 🚀 **一键执行** | 需逐个手动运行脚本 | `main.py` 统一入口，支持全流程/分步/推理 |
-| 📦 **依赖管理** | 无 requirements.txt | 版本锁定依赖清单 |
-| 🚫 **版本控制** | 缺 .gitignore | 标准 Python 项目忽略规则 |
+| 优化维度 | 说明 |
+|---------|------|
+| 🏛️ **分层架构** | config / src / utils / data 四层解耦，职责清晰 |
+| ⚙️ **零硬编码** | dataclass + .env 环境变量驱动，自适应部署环境 |
+| 🔒 **安全加固** | `ast.literal_eval` 替代 `eval`，安全解析标注数据 |
+| 📝 **PEP8 规范** | 全函数类型注解 + Google 风格 docstring + logging |
+| 🛡️ **全链路容错** | try-except + 入参校验 + 编码降级 + 阶段失败隔离 |
+| ♻️ **高复用** | utils 工具层统一 I/O / 日志 / 解析 |
+| 🚀 **一键执行** | `main.py` 支持 6 种运行模式 + RAG 数据集导出 |
+| 🔪 **知识库切片** | 滑动窗口算法 + JSONL 导出，直接对接 LangChain/LlamaIndex |
 
 ---
 
 ## 🎯 简历适配说明
 
-本项目适合在**校招简历**中展示以下能力：
-
 ### 推荐展示位置
 
-- **项目经历** / **机器学习项目** 板块
+**项目经历** / **机器学习 & 数据工程** 板块
 
 ### 简历描述模板
 
-> **智能家居问答多标签文本分类系统** | Python, scikit-learn, pandas
-> - 设计并实现端到端 NLP 流水线：数据生成 → 清洗 → 标注 → 模型训练 → 评估
-> - 使用 TF-IDF + 随机森林多输出分类器，实现设备类型/问题类型/紧急等级三维标签同时预测
-> - 遵循 PEP8 工业级规范进行项目工程化重构：分层架构设计、配置解耦、安全加固（`ast.literal_eval` 替代 `eval`）
-> - 引入 logging 日志体系、异常处理全链路覆盖、`main.py` 统一 CLI 入口
+> **电商智能客服知识库 & 对话语料预处理流水线** | Python, scikit-learn, pandas
+> - 设计并实现端到端数据预处理流水线：FAQ/商品/规则/对话四类数据生成 → 差异化清洗 → 知识库切片 → 意图识别模型
+> - 实现滑动窗口切片算法 (chunk_size=512, overlap=128)，输出 JSONL 格式直接对接 LangChain 向量库
+> - 基于 TF-IDF + 随机森林多输出分类器构建意图识别模块，支持 10+ 电商意图类别
+> - 遵循 PEP8 工业级规范：分层架构、配置解耦、全链路日志追踪、异常容错
+> - 对齐京小智/飞鸽生产数据流程，可输出 RAG 就绪数据集和意图识别模型
 
 ### 面试可延展方向
 
-- **为什么选 TF-IDF + 随机森林**：适合小样本场景，可解释性强，比深度学习更轻量
-- **如何改进**：替换为 BERT + 多标签分类头，引入数据增强提升泛化
-- **如何处理标签不平衡**：class_weight='balanced'、Focal Loss
-- **部署方案**：将模型序列化为 `.pkl`，通过 Flask/FastAPI 提供 REST API
+- **切片策略选型**: 固定大小 vs 语义分块、Sentence-BERT 句子嵌入分块
+- **向量库选型**: Milvus / Qdrant / Chroma，结合本项目 JSONL 一键导入
+- **模型升级路径**: TF-IDF → BERT → 大模型微调 (ChatGLM/Qwen)
+- **工程化加深**: 引入 Prefect/Airflow 调度、Docker 容器化、CI/CD 自动化测试
+- **数据闭环**: 模型预测低置信度样本回流 → 人工复核 → 增量训练
 
 ---
 
 ## 📄 License
 
-MIT License — 详见 [LICENSE](LICENSE) 文件
+MIT License
 
 ---
 
